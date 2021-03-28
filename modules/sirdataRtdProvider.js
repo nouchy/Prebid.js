@@ -23,7 +23,8 @@ const set = (obj, path, val) => {
 };
 
 export function getSegmentsAndCategories(reqBidsConfigObj, onDone, config, userConsent) {
-  const adUnits = reqBidsConfigObj.adUnits || getGlobal().adUnits;
+  const gobalConfig = getGlobal();
+  const adUnits = reqBidsConfigObj.adUnits || gobalConfig.adUnits;
   config.params = config.params || {};
 
   var tcString = (userConsent && userConsent.gdpr && userConsent.gdpr.consentString ? userConsent.gdpr.consentString : '');
@@ -65,8 +66,8 @@ export function getSegmentsAndCategories(reqBidsConfigObj, onDone, config, userC
       if (req.status === 200) {
         try {
           const data = JSON.parse(response);
-          if (data && data.Sirdata_segments) {
-            addSegmentData(adUnits, data.Sirdata_segments, config, onDone);
+          if (data && data.segments) {
+            addSegmentData(adUnits, data, config, onDone, gobalConfig);
           } else {
             onDone();
           }
@@ -89,28 +90,27 @@ export function getSegmentsAndCategories(reqBidsConfigObj, onDone, config, userC
     contentType: 'text/plain',
     method: 'GET',
     withCredentials: sendWithCredentials,
-    crossDomain: true,
+    referrerPolicy: 'unsafe-url',
     crossOrigin: true
   });
 }
 
-export function setBidderOrtb2(bidder, segments, categories) {
+export function setBidderOrtb2(bid, segments, categories, gobalConfig) {
   var ortb2Valid = true;
-  const Gobal = getGlobal();
-  utils.logInfo(Gobal);
-  /* try {
-    if (parseFloat(pbjs.version.substring(1)) < 4.3) {
+
+  try {
+    if (parseFloat(gobalConfig.version.substring(1)) < 4.3) {
       ortb2Valid = false;
     }
   } catch (er) {}
-*/
+
   if (!ortb2Valid) {
-    return setBidderFpd(bidder, segments, categories);
+    return setBidderFpd(bid, segments, categories);
   }
 
   try {
-    bidder.setBidderConfig({
-      bidders: [bidder],
+    gobalConfig.setBidderConfig({
+      bidders: [bid.bidder],
       config: {
         ortb2: {
           site: {
@@ -136,7 +136,7 @@ export function setBidderOrtb2(bidder, segments, categories) {
   return !0
 }
 
-export function setBidderFpd(bidder, segments, categories) {
+export function setBidderFpd(bid, segments, categories) {
   return !0
 }
 
@@ -151,36 +151,49 @@ export function loadCustomFunction (config, adUnit, list, data, bid) {
   return !0
 }
 
-export function addSegmentData(adUnits, data, config, onDone) {
+export function addSegmentData(adUnits, data, config, onDone, gobalConfig) {
+  utils.logInfo(gobalConfig);
   utils.logInfo(adUnits);
   utils.logInfo(data);
-  utils.logInfo(config)
+  utils.logInfo(config);
   config.params = config.params || {};
   config.params.contextualMinRelevancyScore = config.params.contextualMinRelevancyScore ? config.params.contextualMinRelevancyScore : 30;
   var list = [];
   var segments = [];
   var categories = [];
-  if (data && data.contextual_categories && config.params.contextualMinRelevancyScore) {
-    data.contextual_categories.entries().forEach(([cat, value]) => {
-      if (value >= config.params.contextualMinRelevancyScore && list.indexOf(cat) === -1) {
-        list.push(cat);
-        categories.push(cat);
-      }
-    });
-  }
-  if (data && data.segments) {
-    data.segments.entries().forEach(([entry, segment]) => {
-      if (list.indexOf(segment) === -1) {
-        list.push(segment);
-        segments.push(segment);
-      }
-    });
-  }
-  if (!list) { return; }
+  try {
+    if (data && data.contextual_categories && config.params.contextualMinRelevancyScore) {
+      Object.entries(data.contextual_categories).forEach(([cat, value]) => {
+        if (value >= config.params.contextualMinRelevancyScore && list.indexOf(cat) === -1) {
+          list.push(cat);
+          categories.push(cat);
+        }
+      });
+    }
+  } catch (e) {}
+  utils.logInfo(list);
+  try {
+    if (data && data.segments) {
+      Object.entries(data.segments).forEach(([entry, segment]) => {
+        if (list.indexOf(segment) === -1) {
+          list.push(segment);
+          segments.push(segment);
+        }
+      });
+    }
+  } catch (e) {}
+  utils.logInfo(list);
+  if (!list || list.length < 1) { onDone(); return; }
 
-  if (typeof window.googletag != 'undefined' && config.params.setGptKeyValues) {
+  if (typeof window.googletag !== 'undefined' && config.params.setGptKeyValues) {
+    utils.logInfo('Set GPT Targeting');
+    /* window.googletag.cmd.push(function () {
+      window.googletag.pubads().setTargeting('sd_rtd', list);
+    });
+    */
     window.googletag.pubads().getSlots().forEach(function(n) {
       if (typeof n.setTargeting !== 'undefined') {
+        utils.logInfo('Set GPT Targeting : done');
         n.setTargeting('sd_rtd', list);
       }
     })
@@ -220,12 +233,10 @@ export function addSegmentData(adUnits, data, config, onDone) {
           }
         } else if (bid.bidder == 'ix') {
           try {
-            var ipConfig = bid.getConfig('ix.firstPartyData');
+            var ixConfig = bid.firstPartyData || {};
             var newFpd = {'sd_rtd': list};
-            if (typeof ipConfig !== 'undefined') {
-              newFpd = Object.assign(ipConfig, newFpd);
-            }
-            adUnit.setConfig({
+            newFpd = Object.assign(ixConfig, newFpd);
+            gobalConfig.setConfig({
               ix: {
                 firstPartyData: newFpd
               }
@@ -234,7 +245,7 @@ export function addSegmentData(adUnits, data, config, onDone) {
             utils.logError(err.message)
           }
         } else if (bid.bidder == 'rubicon') {
-          setBidderOrtb2(bid.bidder, segments, categories);
+          setBidderOrtb2(bid, segments, categories, gobalConfig);
         }
       }
     })
@@ -244,9 +255,7 @@ export function addSegmentData(adUnits, data, config, onDone) {
   return adUnits;
 }
 
-export function init(config, userConsent) {
-  utils.logInfo(config);
-  utils.logInfo(userConsent);
+export function init(config) {
   return true;
 }
 
